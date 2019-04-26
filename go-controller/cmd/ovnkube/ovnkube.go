@@ -252,7 +252,7 @@ func runOvnKube(ctx *cli.Context) error {
 				panic(err.Error())
 			}
 		}
-		if err := ovnController.Run(); err != nil {
+		if err := ovnController.Run(stopChan); err != nil {
 			logrus.Errorf(err.Error())
 			panic(err.Error())
 		}

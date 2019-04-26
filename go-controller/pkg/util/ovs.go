@@ -33,6 +33,7 @@ const (
 	rhel              = "RHEL"
 	ubuntu            = "Ubuntu"
 	windowsOS         = "windows"
+	ovnSbctlCommand   = "ovn-sbctl"
 )
 
 func runningPlatform() (string, error) {
@@ -82,6 +83,7 @@ type execHelper struct {
 	powershellPath string
 	netshPath      string
 	routePath      string
+	sbctlPath      string
 }
 
 var runner *execHelper
@@ -101,6 +103,10 @@ func SetExec(exec kexec.Interface) error {
 		return err
 	}
 	runner.nbctlPath, err = exec.LookPath(ovnNbctlCommand)
+	if err != nil {
+		return err
+	}
+	runner.sbctlPath, err = exec.LookPath(ovnSbctlCommand)
 	if err != nil {
 		return err
 	}
@@ -197,32 +203,42 @@ func RunOVNNbctlUnix(args ...string) (string, string, error) {
 		stderr.String(), err
 }
 
-// RunOVNNbctlWithTimeout runs command via ovn-nbctl with a specific timeout
-func RunOVNNbctlWithTimeout(timeout int, args ...string) (string, string,
+// RunOVNCmdWithTimeout runs command via specified path with a specific timeout
+func RunOVNCmdWithTimeout(timeout int, path string, auth config.OvnAuthConfig, args ...string) (string, string,
 	error) {
 	var cmdArgs []string
-	if config.OvnNorth.ClientAuth.Scheme == config.OvnDBSchemeSSL {
+	if auth.ClientAuth.Scheme == config.OvnDBSchemeSSL {
 		cmdArgs = []string{
-			fmt.Sprintf("--private-key=%s", config.OvnNorth.ClientAuth.PrivKey),
-			fmt.Sprintf("--certificate=%s", config.OvnNorth.ClientAuth.Cert),
-			fmt.Sprintf("--bootstrap-ca-cert=%s", config.OvnNorth.ClientAuth.CACert),
-			fmt.Sprintf("--db=%s", config.OvnNorth.ClientAuth.GetURL()),
+			fmt.Sprintf("--private-key=%s", auth.ClientAuth.PrivKey),
+			fmt.Sprintf("--certificate=%s", auth.ClientAuth.Cert),
+			fmt.Sprintf("--bootstrap-ca-cert=%s", auth.ClientAuth.CACert),
+			fmt.Sprintf("--db=%s", auth.ClientAuth.GetURL()),
 		}
-	} else if config.OvnNorth.ClientAuth.Scheme == config.OvnDBSchemeTCP {
+	} else if auth.ClientAuth.Scheme == config.OvnDBSchemeTCP {
 		cmdArgs = []string{
-			fmt.Sprintf("--db=%s", config.OvnNorth.ClientAuth.GetURL()),
+			fmt.Sprintf("--db=%s", auth.ClientAuth.GetURL()),
 		}
 	}
 
 	cmdArgs = append(cmdArgs, fmt.Sprintf("--timeout=%d", timeout))
 	cmdArgs = append(cmdArgs, args...)
-	stdout, stderr, err := runOVNretry(runner.nbctlPath, cmdArgs...)
+	stdout, stderr, err := runOVNretry(path, cmdArgs...)
 	return strings.Trim(strings.TrimSpace(stdout.String()), "\""), stderr.String(), err
+}
+
+// RunOVNNbctlWithTimeout runs command via ovn-nbctl with a specific timeout
+func RunOVNNbctlWithTimeout(timeout int, args ...string) (string, string, error) {
+	return RunOVNCmdWithTimeout(timeout, runner.nbctlPath, config.OvnNorth, args...)
 }
 
 // RunOVNNbctl runs a command via ovn-nbctl.
 func RunOVNNbctl(args ...string) (string, string, error) {
-	return RunOVNNbctlWithTimeout(ovsCommandTimeout, args...)
+	return RunOVNCmdWithTimeout(ovsCommandTimeout, runner.nbctlPath, config.OvnNorth, args...)
+}
+
+// RunOVNSbctl runs a command via ovn-sbctl.
+func RunOVNSbctl(args ...string) (string, string, error) {
+	return RunOVNCmdWithTimeout(ovsCommandTimeout, runner.sbctlPath, config.OvnSouth, args...)
 }
 
 // RunIP runs a command via the iproute2 "ip" utility
