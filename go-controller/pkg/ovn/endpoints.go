@@ -6,6 +6,7 @@ import (
 	util "github.com/ovn-org/ovn-kubernetes/go-controller/pkg/util"
 	"github.com/sirupsen/logrus"
 	kapi "k8s.io/api/core/v1"
+	"net"
 )
 
 type lbEndpoints struct {
@@ -87,6 +88,19 @@ func (ovn *Controller) AddEndpoints(ep *kapi.Endpoints) error {
 					vip := util.JoinHostPortInt32(svc.Spec.ClusterIP, svcPort.Port)
 					ovn.AddServiceVIPToName(vip, svcPort.Protocol, svc.Namespace, svc.Name)
 					ovn.handleExternalIPs(svc, svcPort, ips, targetPort)
+					acl, ok := ovn.GetServiceLBToACL(loadBalancer)
+					if !ok {
+						// Not necessarily an error. It may just be that there hasn't been an ACL created.
+						continue
+					}
+					switches, err := ovn.getLogicalSwitchesForLoadBalancer(loadBalancer)
+					if err != nil {
+						logrus.Errorf("Could not retrieve logical switches associated with load balancer %s", loadBalancer)
+						continue
+					}
+					for _, ls := range switches {
+						util.RunOVNNbctl("--if-exists", "remove", "logical_switch", ls, "acl", acl)
+					}
 				}
 			}
 		}
@@ -294,6 +308,40 @@ func (ovn *Controller) deleteEndpoints(ep *kapi.Endpoints) error {
 					"stderr: %q (%v)", lb, stderr, err)
 			}
 		} else {
+			switches, err := ovn.getLogicalSwitchesForLoadBalancer(lb)
+			if err != nil {
+				logrus.Errorf("Error finding logical switch that contains load balancer %s", lb)
+			} else {
+				// XXX Assuming ipv4 for now
+				ip := net.ParseIP(svc.Spec.ClusterIP)
+				if ip == nil {
+					logrus.Errorf("Cannot parse IP address %s", svc.Spec.ClusterIP)
+					continue
+				}
+				var acl_match string
+				if ip.To4() != nil {
+					acl_match = fmt.Sprintf("match=\"ip4.dst==%s && %s && %s.dst==%s\"",
+						svc.Spec.ClusterIP, svcPort.Protocol,
+						svcPort.Protocol, svcPort.Port)
+				} else {
+					acl_match = fmt.Sprintf("match=\"ip6.dst==%s && %s && %s.dst==%s\"",
+						svc.Spec.ClusterIP, svcPort.Protocol,
+						svcPort.Protocol, svcPort.Port)
+				}
+				cmd := "--id=@acl create acl direction=from-lport priority=1000 " + acl_match + " action=reject "
+				for _, ls := range switches {
+					cmd = cmd + "-- add logical_switch " + ls + " acls @acl"
+				}
+
+				acl_uuid, stderr, err := util.RunOVNNbctl(cmd)
+				if err != nil {
+					logrus.Errorf("Error creating ACL reject rule for load balancer with empty vip %s: %s", quotedHostPort, stderr)
+				} else {
+					// Associate ACL UUID with load balancer so we can remove this ACL if
+					// backends are re-added.
+					ovn.AddServiceLBtoACL(lb, acl_uuid)
+				}
+			}
 			_, stderr, err := util.RunOVNNbctl("remove", "load_balancer", lb,
 				"vips", quotedHostPort)
 			if err != nil {

@@ -124,3 +124,13 @@ func (ovn *Controller) createLoadBalancerVIP(lb string, serviceIP string, port i
 	}
 	return err
 }
+
+func (ovn *Controller) getLogicalSwitchesForLoadBalancer(lb string) ([]string, error) {
+	out, _, err := util.RunOVNNbctl("--data=bare", "--no-heading",
+		"--columns=_uuid", "find",
+		"Logical_Switch", fmt.Sprintf("load_balancer{>=}%s", lb))
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(out), nil
+}

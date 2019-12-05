@@ -113,6 +113,11 @@ type Controller struct {
 	serviceVIPToName map[ServiceVIPKey]types.NamespacedName
 
 	serviceVIPToNameLock sync.Mutex
+
+	// Map of load balancers to ACL reject rules
+	serviceLBToACL map[string]string
+
+	serviceLBToACLLock sync.Mutex
 }
 
 const (
@@ -148,6 +153,7 @@ func NewOvnController(kubeClient kubernetes.Interface, wf *factory.WatchFactory)
 		multicastSupport:         config.EnableMulticast,
 		serviceVIPToName:         make(map[ServiceVIPKey]types.NamespacedName),
 		serviceVIPToNameLock:     sync.Mutex{},
+		serviceLBToACLLock:       sync.Mutex{},
 	}
 }
 
@@ -584,6 +590,21 @@ func (oc *Controller) GetServiceVIPToName(vip string, protocol kapi.Protocol) (t
 	defer oc.serviceVIPToNameLock.Unlock()
 	namespace, ok := oc.serviceVIPToName[ServiceVIPKey{vip, protocol}]
 	return namespace, ok
+}
+
+// AddServiceLBToACL associates an empty load balancer with its associated ACL reject rule
+func (oc *Controller) AddServiceLBtoACL(lb string, acl string) {
+	oc.serviceLBToACLLock.Lock()
+	defer oc.serviceLBToACLLock.Unlock()
+	oc.serviceLBToACL[lb] = acl
+}
+
+// GetServiceLBToACL retrieves the associated ACL reject rule for a given load balancer
+func (oc *Controller) GetServiceLBToACL(lb string) (string, bool) {
+	oc.serviceLBToACLLock.Lock()
+	defer oc.serviceLBToACLLock.Unlock()
+	acl, ok := oc.serviceLBToACL[lb]
+	return acl, ok
 }
 
 // gatewayChanged() compares old annotations to new and returns true if something has changed.
